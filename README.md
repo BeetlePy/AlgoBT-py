@@ -2,6 +2,7 @@
 Framework for algorithmic Trading. Under heavy development, not currently functional.
 
 Current Plans:
+
 -BTest:
   an event driven backtester. some basic functionality complete.
 -Research and ResearchStrat:
