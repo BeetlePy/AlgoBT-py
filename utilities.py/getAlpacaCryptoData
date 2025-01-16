@@ -1,0 +1,37 @@
+import polars as pl
+from alpaca.data import CryptoHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from datetime import datetime
+import pandas as pd
+
+api_key = "YourAPIKEY"
+secret_key = "YOURSECRETKEY"
+PATHTOSTORAGE = "YOURPATHTOSTORAGE"
+client = CryptoHistoricalDataClient(api_key=api_key, secret_key=secret_key)
+
+def _requestData(start_time: datetime, end_time: datetime, symbol: str, timeframe) -> pl.DataFrame:
+    # correct format for symbol param: 'BTC/USD'.
+    symbol = [symbol] # Alpaca requires a list format for symbols
+    request_params = CryptoBarsRequest(
+                        symbol_or_symbols=symbol,
+                        timeframe=timeframe,
+                        start=start_time,
+                        end=end_time)
+    bars = client.get_crypto_bars(request_params).df
+    df = pd.DataFrame(bars).reset_index()
+    df = pl.from_pandas(df)
+    return df
+
+def requestANdwriteData(start_date: datetime, end_date: datetime, symbol: str, timeframe: TimeFrame) -> None:
+    # requests and saves data to specified path via alpaca's api. api key reccomended but not required.
+    # start_date and end_date must be an instance of the datetime class, and valid within alpaca's time constands
+    # symbol must be a currency pair, supported by alpaca.
+    # time frame needs to be an instance of the TimeFrame class by alpaca. refer to the api docs for more information.
+    print("Requesting", end='\r')
+    file_symbol = symbol.replace('/', '_') # change '/' to '_' for file-naming.
+    df = _requestData(start_date, end_date, symbol, timeframe)
+    df.write_parquet(f'{PATHTOSTORAGE}/{file_symbol}.parquet')
+    print("File Saved to Drive!         ")
+
+requestANdwriteData(start_date=datetime(2010, 1, 1), end_date=datetime(2024, 12, 2), symbol="BTC/USD", timeframe=TimeFrame.Hour)
