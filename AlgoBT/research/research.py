@@ -5,7 +5,6 @@ import hyppo as hp
 import future
 import matplotlib.pyplot as plt
 from typing import Literal
-from plotter import Plotter
 
 class Research():
     def __init__(self) -> None:
@@ -71,7 +70,10 @@ class ResearchStrat():
     
     def trackIsInTrade(self, df, col_names: list) -> pl.DataFrame:
         for colm in col_names:
-            df = df.with_columns(pl.when(pl.col(colm) == 1) & (colm == "long_entry"))
+            df = df.with_columns(pl.when((pl.col(colm) == 1) & (colm == "long_signal"))
+                                .then(1)
+                                .otherwise(0)
+            )
     
     def runBacktest(self):
         for symbol, df in list(self.dfs.items()):
@@ -100,8 +102,8 @@ class TestStrat(ResearchStrat):
                                         .otherwise(0)
                                         .alias("long_signal"))
 
-            df = df.with_columns(pl.when(pl.col("sma21") > pl.col("sma7")).alias("exit_signal"))
-            self.trackIsInTrade(self, ["long_signal"])
+            df = df.with_columns(pl.when(pl.col("sma21") > pl.col("sma7")).then(1).otherwise(0).alias("exit_signal"))
+            self.trackIsInTrade(df, ["long_signal"])
             del self.dfs[symbol]
             self.dfs[symbol] = df
     
@@ -111,5 +113,6 @@ test = TestStrat()
 test.initColumns()
 test.setSignals()
 test.runBacktest
+pl.Config.set_tbl_cols(11)
 
 
