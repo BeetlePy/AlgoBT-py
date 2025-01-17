@@ -1,10 +1,7 @@
 from imports import *
-from dataclasses import dataclass, field
-from typing import Optional, Literal
-from sortedcontainers import SortedList
-
-
-oid = 0  # Order ID
+from typing import Optional
+import numpy as np
+from BT_utils import Acount, Order, Metrics, TradesLedger
 
 
 class BTest():
@@ -37,11 +34,10 @@ class BTest():
             self.commision_per = 0.0015  # defualt
         if self.slip_range not in globals() or self.slip_range not in locals():
             self.slip_range = (-0.0005, 0.0005)  # default
-        self.open_stops = []
-        # Lists of orders that trigger when price is greater/less than trigger price
-        # All limit and stop orders should be appended to the list.
-        self.trigger_gt_orders = SortedList(key=lambda Order: Order.price_placed)
-        self.trigger_lt_orders = SortedList(key=lambda Order: Order.price_placed)
+        # Arrayss of orders that trigger when price is greater/less than trigger price
+        # All limit and stop orders should be appended to the array.
+        self.trigger_gt_orders = np.array([])
+        self.trigger_lt_orders = np.array([])
         
     def setSignals(self):
         raise NotImplementedError("This method should be overridden in subclasses")
@@ -61,7 +57,8 @@ class BTest():
         acdf["acount_value"] = np.nan
         acdf["cash_balance"] = np.nan
         self.acount.acount_df = acdf
-        if self.long_signal:
+
+        if self.long_signal:  # If strategy inclueds longsignals
             long_signal_idx = self.data_df.get_column_index("long_signal")
         else:
             long_signal_idx = None
@@ -77,8 +74,8 @@ class BTest():
         return timestamp_idx, open_idx, close_idx, high_idx, low_idx, long_signal_idx, short_signal_idx
 
     def _runLoop(self, timestamp_idx, open_idx, close_idx, high_idx, low_idx, long_signal_idx, short_signal_idx):
-        for row in self.data_df.iter_rows():
-            # REMEMBER, ROW IS A TUPLE!!!!!
+        for row in self.data_df.to_numpy():
+            # Df is np array
             # With this engine, there is no way to know if the high/low was first, and when they happned.
             # Due to this we have to make some assumptions.
             # if the close is > open, then the low happend first, and vice versa
@@ -89,8 +86,9 @@ class BTest():
             self.open = row[open_idx]
             self.long_signal = row[long_signal_idx]
             self.short_signal = row[short_signal_idx]
-            self.acount.updateAssetValue(self.symbol, timestamp=self.time, price=self.close)
             self.onRow()  # User-Implemented behaviour
+            self._checkOpenOrders(self.open, self.high, self.low, self.close, self.time)
+            self.acount.updateAssetValue(self.symbol, timestamp=self.time, price=self.close)
             self.acount.logAcount(self.time)  # Log the updated acount attribuites to the acount df
 
     def marketOrder(self, qty, commision_per: Optional[float] = None,
@@ -116,6 +114,9 @@ class BTest():
         price_filled = price * 1 + np.random.randint(slip_range)  # Slippage
         fees = price_filled * (1 + commision_per)
         cost = fees + price_filled
+        if cost > self.acount.cash_balance and existing_order.direction == 1 and not existing_order.short:
+            existing_order.status = "canceled"
+            return order
         if existing_order is not None:
             existing_order.price_filled = price_filled
         self.acount.setAssets(self.symbol, price_filled, qty)
@@ -172,147 +173,16 @@ class BTest():
         if direction == 1:
             self.trigger_lt_orders.append(order)
             self.trades_ledger.addTrade(order)
-            return
         elif direction == 2:
             self.trigger_gt_orders.append(order)
             self.trigger_gt_orders.addTrade(order)
         
-    def _checkOpenOrders(self, open, high, low, close):
-        for order in self.trigger_gt_orders:
-            if order.price_placed == high and order.order_type == "stop":
-                updated_order = self._simOrderFill(time=self.time, price=order.price_placed,qty=order.qty,
-                                  existing_order=order, commision_per=order.future_commision)
-                TradesLedger.updateTrade(updated_order)
-            elif order.price_placed > high:
-                pass
-        
-                        
-            
-            
-class Metrics():
-    """A class to manage and display backtest preformance metrics,
-        acount balance metrics, and rolling stats (rolling win % ect.)"""
-    def __init__(self, data_df):
-        pass
-        
-        
-@dataclass
-class Acount():
-    cash_balance: float
-    assets_value: float
-
-    def __post_init__(self):
-        self.total_value = self.cash_balance + self.assets_value
-        self.assets_book = []
-        self.acount_df = pd.DataFrame
-        # ToDo: Once mulit-asset support is added, use a list comp to init the assets book.
-        self.assets_book.append({"symbol": self.symbol, "price": None, "qty": 0})
-
-    def setAssets(self, asset_symbol, price, qty):
-        # Get the dictionary of asset from self.assets_book.
-        asset_dict = [d for d in self.assets_book if d["symbol"] == asset_symbol][0]
-        asset_dict['qty'] += qty
-        self.cash_balance -= qty * price
-        
-    def removeAssets(self, asset_symbol, qty) -> None:
-        """
-        removes a specified amount of assets from the asset book.
-        If it amounts to all the 
-
-        :param asset_symbol: symbol of asset to remove
-        :param qty: quantity of asset to remove
-        """
-        temp_assets_book = self.assets_book
-        for index, asset in enumerate(temp_assets_book):
-            if asset["symbol"] == asset_symbol:
-                if asset["qty"] == qty:
-                    self.assets_book.remove(asset)
-                    return
-                elif asset["qty"] < qty:
-                    raise ValueError("Error: Cannot remove more assets than held")
-                asset["qty"] = qty
-                self.assets_book[index] = asset
-                return
-        
-    def logAcount(self, timestamp):
-        self.acount_df.at[timestamp, "cash_balance"] = self.cash_balance
-        self.acount_df.at[timestamp, "acount_value"] = self.cash_balance
-
-    def getTotalAssetValue(self):
-        # Intended to be called when assets values are fully updated.
-        # sets self.assets_value to total value of all assets
-        values = []
-        for a in self.assets_book:
-            price = a["price"]
-            qty = a["qty"]
-            value = price * qty
-            values.append(value)
-        self.assets_value = sum(values)
-        self.total_value = self.assets_value + self.cash_balance
-
-    def updateAssetValue(self, symbol: str, timestamp: pl.Datetime, price: float):
-        for asset in self.assets_book:
-            if asset == symbol:
-                asset["price"] = price
-                break  # we don't need any other info
-
-
-@dataclass
-class Order():
-    """_summary_
-    Class containing metadata about an order.
-    """
-    # Represents a single trading order with relevant metadata.
-    status: Literal["open", "filled", "canceled"]  # Whether the order was canceled.
-    time_placed: dt  # Time when the order was placed.
-    price_placed: float  # Price at which the order was placed.
-    qty: float  # Quantity of shares in the transaction.
-    direction: Literal[1, 2]  # 1 = buy, 2 = sell
-    order_type: Optional[Literal["Market", "Limit", "Stop", "Trailing-Stop"]]  # Type of order.
-    fees_paid: Optional[float] = 0  # Fees associated with the order.
-    short: Optional[float] = False 
-    # If the order will operate on borrowed assets or not. A buy order with the short param,
-    # will be a cover.
-    price_filled: Optional[float] = None  # Price at which the order was filled (if any).
-    usd_cost: Optional[float] = None  # Total cost of the order in USD, including fees.
-    order_reason: Optional[str] = None  # Notes on the order (e.g., "Exit condition, RSI > 70").
-    future_commision: Optional[str] = None
-
-    def __post_init__(self):
-        if self.direction not in (1, 2):
-            raise ValueError("`direction` must be 1 (buy) or 2 (sell).")
-        self.order_id = _generateOrderId()   # A unique order id
-
-    def _generateOrderId(self):
-        return self.last_id + 1
-    
-    
-@dataclass
-class TradesLedger():
-    # Represents a collection of trades, organized into parent and daughter orders.
-    orderbook: list[int, Order]  # [id: Order, id: Order]
-    last_id: int = 0
-    
-    def getTradeById(self, trade_id) -> dict:
-        return self.orderbook[trade_id]
-        
-    def addTrade(self, order: Order) -> None:
-        # Add a trade to the ledger.
-        # param order: The order.
-        self.orderbook.append({order.order_id, order})
-
-    def updateTrade(self, order: Order) -> None:
-        id = order.order_id
-        # Keep all orders not except for the one with the pass arg: id
-        self.orderbook.append([x for x in self.orderbook if x['id'] != id])
-        # Add the updated order back to the list
-        self.orderbook.append(order)
-
-    def filterTrades(self, reason: str) -> list[dict[str, Order]]:
-        # Filter trades based on a specific order reason.
-        # param reason: A substring to match in the `order_reason`.
-        # return: A list of trades matching the filter criteria.
-        return [
-            trade for trade in self.orderbook
-            if trade["parentOrder"].order_reason and reason in trade["parentOrder"].order_reason
-        ]
+    def _checkOpenOrders(self, open, high, low, close, time):
+        triggered_gt_orders = self.trigger_gt_orders[self.trigger_gt_orders < high]
+        triggered_lt_orders = self.trigger_lt_orders[self.trigger_lt_orders > low]
+        for order in triggered_gt_orders:
+            updated_order = self._simOrderFill(time, order.price_placed, order.qty, order)
+            TradesLedger.updateTrade(updated_order)
+        for order in triggered_lt_orders:
+            updated_order = self._simOrderFill(time, order.price_placed, order.qty, order)
+            TradesLedger.updateTrade(updated_order)
