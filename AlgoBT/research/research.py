@@ -67,18 +67,75 @@ class ResearchStrat():
         
         # Initialize the universe attr as a list of asset symbols.
         self.universe = list(self.files.keys())
-    
-    def trackIsInTrade(self, df, col_names: list) -> pl.DataFrame:
-        for colm in col_names:
-            df = df.with_columns(pl.when((pl.col(colm) == 1) & (colm == "long_signal"))
-                                .then(1)
-                                .otherwise(0)
+            
+    def trackIsInTrade(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Track whether the strategy is currently in a trade (long or short).
+
+        :param df: Polars DataFrame with required columns:
+                ['long_entry', 'long_exit', 'short_entry', 'short_exit'].
+        :return: DataFrame with 'is_long' and 'is_short' columns indicating active trades.
+        """
+        required_columns = {"long_entry", "long_exit", "short_entry", "short_exit"}
+        if missing := required_columns - set(df.columns):
+            raise ValueError(f"Missing columns: {missing}")
+
+        for direction in ["long", "short"]:
+            entry_col = f"{direction}_entry"
+            exit_col = f"{direction}_exit"
+            position_col = f"is_{direction}"
+
+            # Initialize state column
+            df = df.with_columns(pl.lit(0).alias("_state"))
+
+            # Use a custom function to handle state transitions
+            def state_transition(entry, exit, state):
+                if entry == 1 and state == 0:  # Enter trade
+                    return 1
+                elif exit == 1 and state == 1:  # Exit trade
+                    return 0
+                else:  # Maintain current state
+                    return state
+
+            # Apply the state transition function using `map_elements`
+            df = df.with_columns(
+                pl.struct([entry_col, exit_col, "_state"])
+                .map_elements(
+                    lambda s: state_transition(s[entry_col], s[exit_col], s["_state"]),
+                    return_dtype=pl.Int8,
+                )
+                .alias("_state_new")
             )
-    
+
+            # Update the state column
+            df = df.with_columns(pl.col("_state_new").alias("_state"))
+
+            # Rename the state column to the final position column
+            df = df.with_columns(pl.col("_state").alias(position_col))
+
+            # Drop intermediate columns
+            df = df.drop(["_state", "_state_new"])
+
+        return df
+
     def runBacktest(self):
         for symbol, df in list(self.dfs.items()):
-            df = df.with_columns(pl.col("returns") * pl.col("long_signal"))
+            df = self.trackIsInTrade(df)
+            pl.Config.set_tbl_rows(1000)
+            print(
+                df.select(
+                    "long_entry",
+                    "long_exit",
+                    "is_long",
+                )
+            )
+            return
+            df = df.with_columns((pl.col("returns") * pl.col("is_long")).alias("strategy_returns"))
+
+            del self.dfs[symbol]  # Delete the old dictionary.
+            self.dfs[symbol] = df  # Replace it.
             
+            #ToDO: ADD short returns calc
 
 
 class TestStrat(ResearchStrat):
@@ -96,23 +153,13 @@ class TestStrat(ResearchStrat):
     
     def setSignals(self):
         for symbol, df in list(self.dfs.items()):
-            df = df.with_columns(pl.when((pl.col("sma21") < pl.col("sma7")) &
-                                        (pl.col("sma21").shift(-1) > pl.col("sma7").shift(-1)))
+            df = df.with_columns(pl.when((pl.col("sma21") < pl.col("sma7")))
                                         .then(1)
                                         .otherwise(0)
-                                        .alias("long_signal"))
+                                        .alias("long_entry"))
 
-            df = df.with_columns(pl.when(pl.col("sma21") > pl.col("sma7")).then(1).otherwise(0).alias("exit_signal"))
-            self.trackIsInTrade(df, ["long_signal"])
+            df = df.with_columns(pl.when(pl.col("sma21") > pl.col("sma7")).then(1).otherwise(0).alias("long_exit"))
+            df = df.with_columns((pl.lit(0)).alias("short_entry"))
+            df = df.with_columns((pl.lit(0)).alias("short_exit"))
             del self.dfs[symbol]
             self.dfs[symbol] = df
-    
-    
-
-test = TestStrat()
-test.initColumns()
-test.setSignals()
-test.runBacktest
-pl.Config.set_tbl_cols(11)
-
-
