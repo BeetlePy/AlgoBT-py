@@ -117,25 +117,43 @@ class ResearchStrat():
             df = df.drop(["_state", "_state_new"])
 
         return df
+    
+    def calcReturns(self, df) -> pl.DataFrame:
+        df = df.with_columns(((pl.col("returns") * pl.col("is_long")).alias("long_returns")),
+                                ((pl.col("returns") * pl.col("is_short")).alias("short_returns")))
+        df = df.with_columns(
+            (pl.col("long_returns") + pl.col("short_returns")).alias("strategy_returns")
+        )
+        df = df.with_columns((pl.col("long_returns") * self.starting_cash).alias("cash_returns"))
+        df = df.with_columns(pl.col("cash_returns").cum_sum().alias("total_cash_returns"))
+        df = df.with_columns(
+            pl.col("strategy_returns").cum_sum().alias("cum_returns")
+        )
+        df = df.with_columns(pl.col("returns").cum_sum().alias("buy_and_hold"))
+        return df
 
+    def calcTradeStats(self, df: pl.DataFrame) -> pl.DataFrame:
+        for direction in ("long", "short"):
+            df = df.with_columns(pl.when(pl.col(f"is_{direction}").shift() == 0 & pl.col(f"is_{direction}") == 1)
+                                .then(1)
+                                .otherwise(0)
+                                .alias(f"{direction}_entry"))
+            
+            df = df.with_columns(
+                pl.when(pl.col(f"is_{direction}").shift() == 1 & pl.col(f"is_{direction}") == 0)
+                .then(1)
+                .otherwise(0)
+                .alias(f"{direction}_exit")
+            )
+            
     def runBacktest(self):
         for symbol, df in list(self.dfs.items()):
             df = self.trackIsInTrade(df)
-            pl.Config.set_tbl_rows(1000)
-            print(
-                df.select(
-                    "long_entry",
-                    "long_exit",
-                    "is_long",
-                )
-            )
-            return
-            df = df.with_columns((pl.col("returns") * pl.col("is_long")).alias("strategy_returns"))
+            df = self.calcReturns(df)
 
             del self.dfs[symbol]  # Delete the old dictionary.
             self.dfs[symbol] = df  # Replace it.
-            
-            #ToDO: ADD short returns calc
+
 
 
 class TestStrat(ResearchStrat):
@@ -150,7 +168,6 @@ class TestStrat(ResearchStrat):
             del self.dfs[symbol]  # Delete the old dictionary.
             self.dfs[symbol] = df  # Replace it.
 
-    
     def setSignals(self):
         for symbol, df in list(self.dfs.items()):
             df = df.with_columns(pl.when((pl.col("sma21") < pl.col("sma7")))
@@ -163,3 +180,29 @@ class TestStrat(ResearchStrat):
             df = df.with_columns((pl.lit(0)).alias("short_exit"))
             del self.dfs[symbol]
             self.dfs[symbol] = df
+    
+
+
+
+test = TestStrat()
+test.starting_cash = 100_000
+test.initColumns()
+test.setSignals()
+test.runBacktest()
+pl.Config.set_tbl_cols(15)
+pl.Config.set_tbl_rows(1000)
+df = test.dfs["QQQ"]
+total_returns = sum(df["strategy_returns"].to_numpy())
+print(total_returns)
+
+plt.figure(figsize=(10, 6))
+plt.plot(df["total_cash_returns"])
+#plt.plot(df["cum_returns"])
+#plt.plot(df["buy_and_hold"]
+plt.title("returns over time")
+plt.xlabel("time")
+plt.ylabel("returns")
+plt.grid(True)
+plt.show()
+
+
