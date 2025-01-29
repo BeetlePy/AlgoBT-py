@@ -132,25 +132,44 @@ class ResearchStrat():
         df = df.with_columns(pl.col("returns").cum_sum().alias("buy_and_hold"))
         return df
 
-    def calcTradeStats(self, df: pl.DataFrame) -> pl.DataFrame:
+    def calcTradeStats(self, df) -> pl.DataFrame:
         for direction in ("long", "short"):
-            df = df.with_columns(pl.when(pl.col(f"is_{direction}").shift() == 0 & pl.col(f"is_{direction}") == 1)
-                                .then(1)
-                                .otherwise(0)
-                                .alias(f"{direction}_entry"))
-            
             df = df.with_columns(
-                pl.when(pl.col(f"is_{direction}").shift() == 1 & pl.col(f"is_{direction}") == 0)
-                .then(1)
-                .otherwise(0)
-                .alias(f"{direction}_exit")
+                [
+                    pl.when(pl.col(f"is_{direction}") == 1)
+                    .then(pl.col("returns") + pl.col(f"{direction}_returns").shift(1, fill_value=0))
+                    .otherwise(0)
+                    .alias("cur_trade_teturns"),
+                    
+
+                    pl.when((pl.col(f"is_{direction}").shift() == 0) & (pl.col(f"is_{direction}") == 1))
+                    .then(1)
+                    .otherwise(0)
+                    .alias(f"new_{direction}_entry"),
+                    pl.when((pl.col(f"is_{direction}").shift() == 1) & (pl.col(f"is_{direction}") == 0))
+                    .then(1)
+                    .otherwise(0)
+                    .alias(f"new_{direction}_exit"),
+                ]
             )
+            df = df.with_columns(
+                [
+                    (
+                        pl.when(pl.col(f"new_{direction}_exit") == 1)
+                        .then(pl.col("open"))
+                        .otherwise(0)
+                        .alias("entry_price")
+                    )
+                ]
+            )
+            
+        return df
             
     def runBacktest(self):
         for symbol, df in list(self.dfs.items()):
             df = self.trackIsInTrade(df)
             df = self.calcReturns(df)
-
+            df = self.calcTradeStats(df)
             del self.dfs[symbol]  # Delete the old dictionary.
             self.dfs[symbol] = df  # Replace it.
 
@@ -190,11 +209,13 @@ test.initColumns()
 test.setSignals()
 test.runBacktest()
 pl.Config.set_tbl_cols(15)
-pl.Config.set_tbl_rows(1000)
+pl.Config.set_tbl_rows(30)
 df = test.dfs["QQQ"]
+print(df.columns)
+print(df.select(["new_long_entry", "new_long_exit"]))
 total_returns = sum(df["strategy_returns"].to_numpy())
-print(total_returns)
-
+#print(total_returns)
+"""
 plt.figure(figsize=(10, 6))
 plt.plot(df["total_cash_returns"])
 #plt.plot(df["cum_returns"])
@@ -204,5 +225,5 @@ plt.xlabel("time")
 plt.ylabel("returns")
 plt.grid(True)
 plt.show()
-
+"""
 
