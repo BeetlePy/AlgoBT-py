@@ -9,7 +9,7 @@ class Equity():
     timeframe: str  # Lowest timeframe
     df: pl.DataFrame  # Base df
 
-    def __postinit__(self):
+    def __post_init__(self):
         setattr(self, f"{self.timeframe}_df", self.df)
     
     def addTimeframe(self, data_df, timeframe):
@@ -22,16 +22,15 @@ class Indicator():
     bt_class: type[object]
 
     def __getitem__(self, index_offset: int):
-        # Get timestamp column ONLY (assume column named "datetime")
-        timestamp_col = self.df["datetime"].to_numpy(dtype="datetime64[ns]")
-        target_ts = bt_class.current_timestamp.to_numpy(dtype="datetime64[ns]")
+        timestamp_col = self.df["timestamp"].cast(pl.Datetime("ns")).to_numpy()
+        target_ts = np.datetime64(self.bt_class.current_timestamp)
         matches = np.where(timestamp_col == target_ts)[0]
         if not matches.size:
             raise KeyError(f"No data for timestamp {target_ts}")
         base_row = matches[0]
         requested_row = base_row - index_offset
+
         if requested_row < 0 or requested_row >= len(self.df):
-            return None
+            raise IndexError(f"Offset {index_offset} out of bounds")
 
         return self.df.row(requested_row, named=True)
-
