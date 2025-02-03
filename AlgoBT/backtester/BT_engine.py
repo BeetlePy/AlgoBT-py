@@ -1,14 +1,19 @@
 import polars as pl
 from typing import Optional
 import numpy as np
-from backtester_utils import Equity, Indicator
+from backtester_utils import Equity, Indicator, onrow
 from orders import OrderSim, Order, OrderBook
+from contextlib import contextmanager
+from functools import wraps
+
 
 class BTest():
     """Parent class for backtesting engine.
     Required methods:
     __init___(),,
     onRow()"""
+
+    __slots__ = ("open", "close", "high", "low", "volume")  # OHLCV
 
     def __init__(self):
         raise NotImplementedError("This method should be overridden in subclasses")
@@ -49,6 +54,8 @@ class BTest():
         sorted_cols = ["timestamp", "open", "high", "low", "close", "volume", "avg_volume"]
         remaining_cols = [col for col in self.master_df.columns if col not in sorted_cols]
         self.master_df = self.master_df.select(sorted_cols + remaining_cols)
+    
+
 
     def run(self):
         self.master_df = self.master_df.with_columns(pl.col("volume").rolling_mean(100).fill_null(pl.col("volume"))
@@ -71,12 +78,13 @@ class BTest():
         :param data: DataFrame of OHLC(V) data
         :param timeframe: timeframe of data. Lowest timeframe of all timeframes to be added per this equity.
         """
-        eq = Equity(ticker=ticker, timeframe=timeframe, df=data)
+        eq = Equity(ticker=ticker)
+        eq.addTimeframe(data_df=data, timeframe=timeframe)
         return eq
     
     def initIndicator(self, equity, calc, timeframe, name: Optional[str] = "") -> Indicator:
         df = getattr(equity, f"{timeframe}_df")
-        df = calc(df, length=20)
+        df = calc(df)
         if name == "":
             name = f"indicator{len(df.columns)}"
         ind = Indicator(df=df, col=name, bt_class=self)
@@ -84,7 +92,7 @@ class BTest():
 
 
     def marketOrder(self, equity, qty: float, order_side: str):
-        order, cost = self.orderSim.createMarketOrder(price=self.open, qty=qty, time=self.current_timestamp,
+        order, cost = self.orderSim.createMarketOrder(price=open, qty=qty, time=self.current_timestamp,
                                                     side=order_side, open=self.open, high=self.high, low=self.low,
                                                     close=self.close, volume=self.volume, avg_volume=self.avg_volume)
         self.orderBook.addOrder(order)
@@ -102,5 +110,6 @@ class BTest():
     def stopOrder():
         pass
     
-    def _checkOpenOrders(self, open, high, low, close, time):
-        pass
+    @contextmanager
+    def use_attributes(self):
+        yield self.open, self.close, self.high, self.low, self.volume

@@ -6,18 +6,16 @@ from imports import *
 @dataclass
 class Equity():
     ticker: str  # Ticker object for equty
-    timeframe: str  # Lowest timeframe
-    df: pl.DataFrame  # Base df
 
     def __post_init__(self):
-        setattr(self, f"{self.timeframe}_df", self.df)
+        self.timeframes = {}
     
-    def addTimeframe(self, data_df, timeframe):
-        setattr(self, f"{timeframe}_df", data_df)
+    def addTimeframe(self, data_df: pl.DataFrame, timeframe: str):
+        self.timeframes[timeframe] = data_df
 
 @dataclass
 class Indicator():
-    df: pl.DataFrame  # Dataframe where the column coanting the indicator resides.
+    df: pl.DataFrame  # Dataframe where the column containing the indicator resides.
     col: str  # Name of col in self.df
     bt_class: type[object]
 
@@ -34,3 +32,19 @@ class Indicator():
             raise IndexError(f"Offset {index_offset} out of bounds")
 
         return self.df.row(requested_row, named=True)
+
+def onrow(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        with self.use_attributes() as (open, close, high, low, volume):
+            # Inject attributes into the function's scope
+            return func(self, open, close, high, low, volume, *args, **kwargs)
+
+    return wrapper
+@dataclass
+class Row():
+    open: float
+    high: float
+    low: float
+    close: float
+    volume:float
