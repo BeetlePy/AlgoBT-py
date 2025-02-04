@@ -54,8 +54,6 @@ class BTest():
         sorted_cols = ["timestamp", "open", "high", "low", "close", "volume", "avg_volume"]
         remaining_cols = [col for col in self.master_df.columns if col not in sorted_cols]
         self.master_df = self.master_df.select(sorted_cols + remaining_cols)
-    
-
 
     def run(self):
         self.master_df = self.master_df.with_columns(pl.col("volume").rolling_mean(100).fill_null(pl.col("volume"))
@@ -63,12 +61,6 @@ class BTest():
         self.orderCols()
         for row in self.master_df.iter_rows():
             self.current_timestamp = row[0]
-            self.close = row[4]
-            self.open = row[1]
-            self.high = row[2]
-            self.low = row[3]
-            self.volume = row[5]
-            self.avg_volume = row[6]
             self.onRow()
 
     def initEquity(self, ticker: str, data: pl.DataFrame, timeframe: str) -> Equity:
@@ -78,18 +70,16 @@ class BTest():
         :param data: DataFrame of OHLC(V) data
         :param timeframe: timeframe of data. Lowest timeframe of all timeframes to be added per this equity.
         """
-        eq = Equity(ticker=ticker)
-        eq.addTimeframe(data_df=data, timeframe=timeframe)
+        eq = Equity(ticker=ticker, bt_object=self)
         return eq
-    
-    def initIndicator(self, equity, calc, timeframe, name: Optional[str] = "") -> Indicator:
-        df = getattr(equity, f"{timeframe}_df")
-        df = calc(df)
-        if name == "":
-            name = f"indicator{len(df.columns)}"
-        ind = Indicator(df=df, col=name, bt_class=self)
-        return ind
 
+    def addIndicator(self, equity_object, name, calc_function):
+        """Adds an Indicator to an existing equity object.
+
+        :param equity_object: Existing Equtiy() instance to add indicator
+        :param name: Name of indicator to be added. Will become Equity() atrribuite.
+        :param calc_function: Function used to calculate indicator. Use polars, and only columns in the DataFrame.
+        """
 
     def marketOrder(self, equity, qty: float, order_side: str):
         order, cost = self.orderSim.createMarketOrder(price=open, qty=qty, time=self.current_timestamp,
@@ -112,4 +102,5 @@ class BTest():
     
     @contextmanager
     def use_attributes(self):
+        exec(yield self.open, self.close, self.high, self.low, self.volume)
         yield self.open, self.close, self.high, self.low, self.volume

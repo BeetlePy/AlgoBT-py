@@ -3,35 +3,55 @@ from typing import Optional, Literal
 from imports import *
 
 
-@dataclass
-class Equity():
-    ticker: str  # Ticker object for equty
+class Equity:
+    __slots__ = ("_current_idx", "indicaotrs", "bt_object", "ticker", "timeframe")
 
-    def __post_init__(self):
-        self.timeframes = {}
-    
-    def addTimeframe(self, data_df: pl.DataFrame, timeframe: str):
-        self.timeframes[timeframe] = data_df
+    def __init__(self, ticker: str, bt_object: object, current_idx: int, timeframe):
+        self.timeframe = timeframe
+        self.ticker = ticker
+        self.bt_object = bt_object
+        self.latest_idx = current_idx
+        self.indicators = {}  # Dict of indicators. Includes OHLCV.
 
-@dataclass
-class Indicator():
-    df: pl.DataFrame  # Dataframe where the column containing the indicator resides.
-    col: str  # Name of col in self.df
-    bt_class: type[object]
+    def updateIndicators(self, cur_timestamp: pl.Datetime) -> None:
+        for _, ind in self.indicators.items():
+            ind.getKnownData(cur_timestamp)
 
-    def __getitem__(self, index_offset: int):
-        timestamp_col = self.df["timestamp"].cast(pl.Datetime("ns")).to_numpy()
-        target_ts = np.datetime64(self.bt_class.current_timestamp)
-        matches = np.where(timestamp_col == target_ts)[0]
-        if not matches.size:
-            raise KeyError(f"No data for timestamp {target_ts}")
-        base_row = matches[0]
-        requested_row = base_row - index_offset
+    def addIndicator(self, col_name, name):
+        """Usage:\n
+        Equity.name[index]\n
+        Ex: SPY.close[1]\n
 
-        if requested_row < 0 or requested_row >= len(self.df):
-            raise IndexError(f"Offset {index_offset} out of bounds")
+        :param col_name: name of the indicator column indide the column.
+        :param name: name of indicator for refrence.
+        """
+        indicator = Indicator(df.select("timestamp", "col"), self.timeframe)
+        self.indicators[name] = indicator
 
-        return self.df.row(requested_row, named=True)
+    def __getattribute__(self, name: str):
+        """Dot notation access: equity.close"""
+        if name in self.indicators.keys():
+            return self.indicators[name]
+        else:
+            raise AttributeError(f"Error: name: {name} not in self.indicators.")
+
+class Indicator:
+    __slots__ = ("df", "timeframe", "name", "known_data", "name")
+
+    def __init__(self, df: pl.DataFrame, timeframe: pl.Datetime, name: str):
+        self.df = df
+        self.timeframe = timeframe
+        self.name = name
+
+    def getKnownData(self, timestamp) -> None:
+        curr_and_past_data = self.df.filter(pl.col("timestamp") <= timestamp)
+        self.known_data = curr_and_past_data.select(self.name).to_numpy()
+        self.known_data = np.flip(self.known_data)
+
+    def __getitem__(self, offset: int) -> float:
+        if self.known_data is None:
+            raise ValueError("No data available. Call `getKnownData` first.")
+        return self.known_data[offset]
 
 def onrow(func):
     @wraps(func)
@@ -41,6 +61,7 @@ def onrow(func):
             return func(self, open, close, high, low, volume, *args, **kwargs)
 
     return wrapper
+
 @dataclass
 class Row():
     open: float
