@@ -14,8 +14,6 @@ class BTest(ABC):
     __init___(),,
     onRow()"""
 
-    __slots__ = ("open", "close", "high", "low", "volume")  # OHLCV
-
     def __init__(self):
         pass
 
@@ -74,6 +72,7 @@ class BTest(ABC):
         :param name: name of equtiy class instance.
         """
         eq = Equity(ticker=ticker, bt_object=self, timeframe=timeframe, name=name)
+        self.__addDefaultIndicators(data, eq)  # Add OHLCV as indicators.
         self.equities.append(eq)
         return eq
 
@@ -87,6 +86,13 @@ class BTest(ABC):
         :param calc_function: Function used to calculate indicator. Optional if column already exists in indicator.
         """
         equity_object.addIndicator(df, col_name, name)
+
+    def __addDefaultIndicators(self, df, equity_object: Equity):
+        self.addIndicator(df, equity_object, "open", "open")
+        self.addIndicator(df, equity_object, "high", "high")
+        self.addIndicator(df, equity_object, "low", "low")
+        self.addIndicator(df, equity_object, "close", "close")
+        self.addIndicator(df, equity_object, "volume", "volume")
 
     def marketOrder(self, equity, qty: float, order_side: str):
         order, cost = self.orderSim.createMarketOrder(price=open, qty=qty, time=self.current_timestamp,
