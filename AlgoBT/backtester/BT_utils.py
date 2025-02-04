@@ -1,39 +1,43 @@
 from dataclasses import dataclass
 from typing import Optional, Literal
 from imports import *
+from functools import wraps
+from types import SimpleNamespace
 
 
 class Equity:
-    __slots__ = ("_current_idx", "indicaotrs", "bt_object", "ticker", "timeframe")
+    __slots__ = ("indicators", "bt_object", "ticker", "timeframe", "name")
 
-    def __init__(self, ticker: str, bt_object: object, current_idx: int, timeframe):
+    def __init__(self, ticker: str, bt_object: object, timeframe, name):
+        self.name = name
         self.timeframe = timeframe
         self.ticker = ticker
         self.bt_object = bt_object
-        self.latest_idx = current_idx
         self.indicators = {}  # Dict of indicators. Includes OHLCV.
 
     def updateIndicators(self, cur_timestamp: pl.Datetime) -> None:
         for _, ind in self.indicators.items():
             ind.getKnownData(cur_timestamp)
+            print("know data fetched")
 
-    def addIndicator(self, col_name, name):
+    def addIndicator(self, df, col_name, name):
         """Usage:\n
         Equity.name[index]\n
         Ex: SPY.close[1]\n
 
+        :param df: dataframe containing timestamp and indicator columns.
         :param col_name: name of the indicator column indide the column.
         :param name: name of indicator for refrence.
         """
-        indicator = Indicator(df.select("timestamp", "col"), self.timeframe)
+        indicator = Indicator(df.select("timestamp", col_name), self.timeframe, name)
         self.indicators[name] = indicator
 
     def __getattribute__(self, name: str):
         """Dot notation access: equity.close"""
-        if name in self.indicators.keys():
-            return self.indicators[name]
-        else:
-            raise AttributeError(f"Error: name: {name} not in self.indicators.")
+        indicators = super().__getattribute__("indicators")
+        if name in indicators.keys():
+            return indicators[name]
+        return super().__getattribute__(name)
 
 class Indicator:
     __slots__ = ("df", "timeframe", "name", "known_data", "name")
@@ -56,10 +60,9 @@ class Indicator:
 def onrow(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
-        with self.use_attributes() as (open, close, high, low, volume):
-            # Inject attributes into the function's scope
-            return func(self, open, close, high, low, volume, *args, **kwargs)
-
+        equities = {eq.name: eq for eq in self.equities}
+        namespace = SimpleNamespace(**equities)
+        return func(self, *args, namespace, **kwargs)
     return wrapper
 
 @dataclass

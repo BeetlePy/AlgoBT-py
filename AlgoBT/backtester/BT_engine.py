@@ -1,13 +1,14 @@
 import polars as pl
 from typing import Optional
 import numpy as np
-from backtester_utils import Equity, Indicator, onrow
+from BT_utils import Equity, Indicator, onrow
 from orders import OrderSim, Order, OrderBook
 from contextlib import contextmanager
 from functools import wraps
+from abc import ABC, abstractmethod
 
 
-class BTest():
+class BTest(ABC):
     """Parent class for backtesting engine.
     Required methods:
     __init___(),,
@@ -16,25 +17,23 @@ class BTest():
     __slots__ = ("open", "close", "high", "low", "volume")  # OHLCV
 
     def __init__(self):
-        raise NotImplementedError("This method should be overridden in subclasses")
+        pass
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        # Store the original __init__ of the subclass
         original_init = cls.__init__
 
         def wrapped_init(self, *args, **kwargs):
-            # Call the original __init__
+            self.equities = []
             original_init(self, *args, **kwargs)
-            # Call __postinit__ after the subclass's __init__
             self.__postinit__()
 
-        # Replace the subclass's __init__ with the wrapped version
         cls.__init__ = wrapped_init
 
     def __postinit__(self):
         self.orderSim = OrderSim()
         self.orderBook = OrderBook([])
+
         try:
             _ = self.cash
         except AttributeError:
@@ -47,8 +46,9 @@ class BTest():
             print("Comision percent not set. Defaulting to 0.05%")
             self.commision_per = 0.0005
 
+    @abstractmethod
     def onRow(self):
-        raise NotImplementedError("This method should be overridden in subclasses")
+        pass
     
     def orderCols(self):
         sorted_cols = ["timestamp", "open", "high", "low", "close", "volume", "avg_volume"]
@@ -61,25 +61,32 @@ class BTest():
         self.orderCols()
         for row in self.master_df.iter_rows():
             self.current_timestamp = row[0]
+            for eq in self.equities:
+                eq.updateIndicators(self.current_timestamp)
             self.onRow()
 
-    def initEquity(self, ticker: str, data: pl.DataFrame, timeframe: str) -> Equity:
+    def initEquity(self, ticker: str, data: pl.DataFrame, timeframe: str, name:str) -> Equity:
         """Creates an Equity class and stores data
 
         :param ticker: Ticker of equtiy
         :param data: DataFrame of OHLC(V) data
         :param timeframe: timeframe of data. Lowest timeframe of all timeframes to be added per this equity.
+        :param name: name of equtiy class instance.
         """
-        eq = Equity(ticker=ticker, bt_object=self)
+        eq = Equity(ticker=ticker, bt_object=self, timeframe=timeframe, name=name)
+        self.equities.append(eq)
         return eq
 
-    def addIndicator(self, equity_object, name, calc_function):
+    def addIndicator(self, df, equity_object: Equity, name, col_name, calc_function=None):
         """Adds an Indicator to an existing equity object.
 
-        :param equity_object: Existing Equtiy() instance to add indicator
-        :param name: Name of indicator to be added. Will become Equity() atrribuite.
-        :param calc_function: Function used to calculate indicator. Use polars, and only columns in the DataFrame.
+        "param df: Datframe with indicator value or values for indicator calculation source.
+        :param equity_object: Existing Equtiy() instance to add indicator.
+        :param alias: Name of indicator to be added. Will become Equity() atrribuite.
+        :param col_name: Name of column to be used for indicator.
+        :param calc_function: Function used to calculate indicator. Optional if column already exists in indicator.
         """
+        equity_object.addIndicator(df, col_name, name)
 
     def marketOrder(self, equity, qty: float, order_side: str):
         order, cost = self.orderSim.createMarketOrder(price=open, qty=qty, time=self.current_timestamp,
@@ -99,8 +106,3 @@ class BTest():
 
     def stopOrder():
         pass
-    
-    @contextmanager
-    def use_attributes(self):
-        exec(yield self.open, self.close, self.high, self.low, self.volume)
-        yield self.open, self.close, self.high, self.low, self.volume
