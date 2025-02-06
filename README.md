@@ -35,10 +35,12 @@ YourStrategy(BTest)
         self.addIndicator(spy_df, equity_object=self.spy, name="sma20", col_name="sma20)
 ```
 ## Accesing indicators and OHLCV
-In order to acces any indicators, you must use the onRow() method with the @onrow decorator. In addition to self, you must pass a parameter. It will become the refrence for the data accessor. It is reccomended to use d as the parameter.
+Create one or more methods with the @onrow(timeframe) decorator to be called on all rows with the corresponding timeframe. Param timeframe corresponds with the one initialized from the equtiy, and it is not curremtly enforced for the dataframes in the equity instances to have the right timeframe. 
+
+To access an indicator, first pass the alias for the data fetcher into your method. We will use and reccomend d.
 ```
-@onrow
-def onRow(self, d):
+@onrow(timeframe="1m")
+def onRowMin(self, d):
     close = d.spy.close[0]
     sma20 = d.spy.sma20[0]
 ```
