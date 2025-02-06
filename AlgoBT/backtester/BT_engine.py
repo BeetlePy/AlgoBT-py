@@ -1,7 +1,7 @@
 import polars as pl
 from typing import Optional
 import numpy as np
-from BT_utils import Equity, Indicator, onrow
+from BT_utils import Equity, Indicator, onrow, Duration
 from orders import OrderSim, Order, OrderBook
 from contextlib import contextmanager
 from functools import wraps
@@ -31,37 +31,35 @@ class BTest(ABC):
     def __postinit__(self):
         self.orderSim = OrderSim()
         self.orderBook = OrderBook([])
+        self._handlers = {}
+        self.__registerHandlers()
 
-        try:
-            _ = self.cash
-        except AttributeError:
+        if not hasattr(self, "cash"):
             print("Cash balance not set. Defaulting to 100k.")
             self.cash = 100000
 
-        try:
-            _ = self.commision_per
-        except AttributeError:
+        if not hasattr(self, "commision_per"):
             print("Comision percent not set. Defaulting to 0.05%")
             self.commision_per = 0.0005
+    
+    def __createTimeline(self) -> list:
+        timeline = []
+        for eq in self.equities:
+            timeline.extend(list(zip(eq.df["timestamp"], [eq.timeframe] * len(eq.df))))
+        timeline = sorted(set(timeline), key=lambda x: x[0])  # Convert to set and sort by first value.
+        return timeline
 
     @abstractmethod
-    def onRow(self):
+    def onRow(self, data_alias, timeframe: Duration):
         pass
-    
-    def orderCols(self):
-        sorted_cols = ["timestamp", "open", "high", "low", "close", "volume", "avg_volume"]
-        remaining_cols = [col for col in self.master_df.columns if col not in sorted_cols]
-        self.master_df = self.master_df.select(sorted_cols + remaining_cols)
 
     def run(self):
-        self.master_df = self.master_df.with_columns(pl.col("volume").rolling_mean(100).fill_null(pl.col("volume"))
-                                                    .alias("avg_volume"))
-        self.orderCols()
-        for row in self.master_df.iter_rows():
-            self.current_timestamp = row[0]
+        timeline = self.__createTimeline()
+        for timestamp, timeframe in timeline:
+            self.current_timestamp = timestamp
             for eq in self.equities:
                 eq.updateIndicators(self.current_timestamp)
-            self.onRow()
+            self.__triggerHandler(timeframe=timeframe)
 
     def initEquity(self, ticker: str, data: pl.DataFrame, timeframe: str, name:str) -> Equity:
         """Creates an Equity class and stores data
@@ -71,7 +69,7 @@ class BTest(ABC):
         :param timeframe: timeframe of data. Lowest timeframe of all timeframes to be added per this equity.
         :param name: name of equtiy class instance.
         """
-        eq = Equity(ticker=ticker, bt_object=self, timeframe=timeframe, name=name)
+        eq = Equity(df=data, ticker=ticker, bt_object=self, timeframe=timeframe, name=name)
         self.__addDefaultIndicators(data, eq)  # Add OHLCV as indicators.
         self.equities.append(eq)
         return eq
@@ -83,8 +81,10 @@ class BTest(ABC):
         :param equity_object: Existing Equtiy() instance to add indicator.
         :param alias: Name of indicator to be added. Will become Equity() atrribuite.
         :param col_name: Name of column to be used for indicator.
-        :param calc_function: Function used to calculate indicator. Optional if column already exists in indicator.
+        :param calc_function: Function used to calculate indicator. Optional if indicator alread is a column.
         """
+        if calc_function is not None:
+            df = calc_function(equity_object.df)
         equity_object.addIndicator(df, col_name, name)
 
     def __addDefaultIndicators(self, df, equity_object: Equity):
@@ -112,3 +112,19 @@ class BTest(ABC):
 
     def stopOrder():
         pass
+
+    def __registerHandlers(self):
+        # Automatically register methods decorated with @onrow
+        for method_name in dir(self):  # Iterate through all methods in self.
+            method = getattr(self, method_name)  # Get the method.
+            if hasattr(method, "_onrow_params"):  # If _onrow_params were passed into the method (timeframe)
+                params = method._onrow_params  # Dictionary of params
+                timeframe = params.get("timeframe", "default")
+                self._handlers[timeframe] = method
+
+    def __triggerHandler(self, timeframe="default", data=None):
+        handler = self._handlers.get(timeframe)
+        if handler:
+            handler(data)
+        else:
+            raise ValueError(f"No handler for timeframe {timeframe}")
